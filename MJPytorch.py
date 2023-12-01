@@ -19,6 +19,36 @@ device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 criterion = nn.CrossEntropyLoss()
 
+
+#建立dataset class
+class CifarDataset(Dataset):
+    def __init__(self, dataset,decision_mode=False):
+        super().__init__()
+        self.images =  dataset        
+        self.classess= self.images.class_to_idx
+        self.classes = self.images.class_to_idx.items()
+        self.flag= [True] * len(self.images)
+        self.decision_mode=decision_mode
+        
+        self.loss=[0] * len(self.images)
+        self.loss_rank= [0] * len(self.images)
+        
+        # self.sum=0
+    def __len__(self):
+        return len(self.images)
+   
+    def __getitem__(self,idx):
+        image, label=self.images[idx]
+        
+    
+        if(self.decision_mode==True):
+            label=torch.tensor(int(self.flag[idx]))
+        return image,label,idx
+    
+    def update_flag(self, idx):
+        self.flag[idx] = False
+
+
 #建立dataset class
 class ImageDataset(Dataset):
     def __init__(self, root,trans,decision_mode=False):
@@ -29,7 +59,8 @@ class ImageDataset(Dataset):
         self.flag= [True] * len(self.images)
         self.decision_mode=decision_mode
         self.transform = trans
-
+        self.loss=[0] * len(self.images)
+        self.loss_rank= [0] * len(self.images)
         
         # self.sum=0
     def __len__(self):
@@ -62,7 +93,8 @@ class ImagecsvDataset(Dataset):
         self.flag= [True] * len(self.path)
         self.decision_mode=decision_mode
         self.transform = trans
-
+        self.loss=[0] * len(self.path)
+        self.loss_rank= [0] * len(self.path)
         
         # self.sum=0
     def __len__(self):
@@ -70,7 +102,7 @@ class ImagecsvDataset(Dataset):
    
     def __getitem__(self,idx):
         
-        img_path = os.path.join(self.root_dir, self.path[idx])
+        img_path = os.path.join(self.root_dir, self.path[idx]+'.jpeg')
         img = Image.open(img_path)
         
         img=self.transform(img)
@@ -156,7 +188,7 @@ def evaluate_model(model,data_dl,size,data_name,mode=None):
 
 
 #訓練模型
-def trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo):
+def trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo,wmse=False):
         train_accus=[]
         val_accus=[]
         best_val_accu = 0.0
@@ -182,7 +214,13 @@ def trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo)
                         # _, y_pred_tag = torch.max(out, dim = 1)  
                         
                         loss = criterion(out, target)
-                        
+
+                        if(data_name=='0'):
+                            if(wmse==True):
+                                loss_wmse=0
+                                for i,out,target in zip(idx,out,target):    
+                                        train_dl.dataset.dataset.loss[i]=train_dl.dataset.dataset.loss[i]+calculate_wmse(epoch,epochs,out,target)
+                                        loss_wmse+=train_dl.dataset.dataset.loss[i]
                         loss.backward()
                         optim.step()
                         # print(target)
@@ -270,7 +308,10 @@ def plot_confusion_matrix(confusion_matrix_train,confusion_matrix_valid,model_na
     sns.heatmap(confusion_matrix_train, annot=True, fmt='',cbar=False,ax=ax1,square=True).set(title=f"{model_algo}_{model_name} train confusion matrix", xlabel="Predicted Label", ylabel="True Label")
     sns.heatmap(confusion_matrix_valid, annot=True, fmt='',ax=ax2,square=True).set(title=f"{model_algo}_{model_name} valid confusion matrix", xlabel="Predicted Label", ylabel="True Label")
 
-
+def calculate_wmse(epoch,epochs,out,target):
+    criterion = nn.CrossEntropyLoss(reduction='none')
+    loss=criterion(out,target)
+    return epoch/((epochs*(epochs+1))/2)*loss
 
 # 將資料切分成true and false
 def split_data(model_0,data_dl,split_mode):
@@ -305,7 +346,8 @@ def split_data(model_0,data_dl,split_mode):
                     else:
                         indexT.append(idx.cpu().numpy().item())   
                 elif(split_mode[0]=='softmax'):
-                    if(softmax<0.6):
+                 
+                    if(softmax.max()<split_mode[1]):
                         indexF.append(idx.cpu().numpy().item())  
                         data_dl.dataset.dataset.update_flag(idx)
                     else:
@@ -319,7 +361,11 @@ def split_data(model_0,data_dl,split_mode):
                         indexT.append(idx.cpu().numpy().item()) 
                 
                 elif(split_mode=='wmse'):
-                    print("wait")
+                    if(data_dl.dataset.dataset.loss[idx]>split_mode[1]):
+                        indexF.append(idx.cpu().numpy().item())  
+                        data_dl.dataset.dataset.update_flag(idx)
+                    else:
+                        indexT.append(idx.cpu().numpy().item())  
                             
             torch.cuda.empty_cache() 
         return indexF,indexT
