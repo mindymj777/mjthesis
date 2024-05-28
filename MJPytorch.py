@@ -19,27 +19,19 @@ criterion = nn.CrossEntropyLoss()
 
 #建立dataset class
 class CifarDataset(Dataset):
-    def __init__(self, dataset,decision_mode=False):
+    def __init__(self, dataset):
         super().__init__()
         self.images =  dataset        
         self.classess= self.images.class_to_idx
         self.classes = self.images.class_to_idx.items()
         self.flag= [True] * len(self.images)
-        self.decision_mode=decision_mode
-        
-        self.loss=[0] * len(self.images)
-        self.loss_rank= [0] * len(self.images)
-        
-        # self.sum=0
+
     def __len__(self):
         return len(self.images)
    
 
     def __getitem__(self,idx):
         image, label=self.images[idx]
-
-        if(self.decision_mode==True):
-            label=torch.tensor(int(self.flag[idx]))
 
         return image,label,idx
     
@@ -50,18 +42,16 @@ class CifarDataset(Dataset):
 
 #建立dataset class
 class ImageDataset(Dataset):
-    def __init__(self, root,trans,decision_mode=False):
+    def __init__(self, root,trans):
 
         super().__init__()
         self.images = ImageFolder(root=root)        
         self.classess= self.images.class_to_idx
         self.classes = self.images.class_to_idx.items()
         self.flag= [True] * len(self.images)
-        self.decision_mode=decision_mode
+  
         self.transform = trans
-        self.loss=[0] * len(self.images)
-        self.loss_rank= [0] * len(self.images)
-        # self.sum=0
+
 
     def __len__(self):
         return len(self.images)
@@ -70,9 +60,7 @@ class ImageDataset(Dataset):
         image, label=self.images[idx]
         
         image=self.transform(image)
-    
-        if(self.decision_mode==True):
-            label=torch.tensor(int(self.flag[idx]))
+
         return image,label,idx
     
     def update_flag(self, idx):
@@ -81,7 +69,7 @@ class ImageDataset(Dataset):
 
 #建立dataset class
 class ImagecsvDataset(Dataset):
-    def __init__(self, root,csv_path,trans,decision_mode=False):
+    def __init__(self, root,csv_path,trans):
         super().__init__()
         self.train_truth=pd.read_csv(csv_path)
         self.path=self.train_truth['filename']
@@ -91,10 +79,9 @@ class ImagecsvDataset(Dataset):
         self.train_truth['label']=self.train_truth['label'].map(self.classess)
 
         self.flag= [True] * len(self.path)
-        self.decision_mode=decision_mode
+  
         self.transform = trans
-        self.loss=[0] * len(self.path)
-        self.loss_rank= [0] * len(self.path)
+
         
         # self.sum=0
     def __len__(self):
@@ -108,9 +95,6 @@ class ImagecsvDataset(Dataset):
         img=self.transform(img)
         label=torch.tensor(int(self.train_truth['label'][idx]))
 
-        if(self.decision_mode==True):
-            label=torch.tensor(int(self.flag[idx]))
-
         return img,label,idx
     
     def update_flag(self, idx):
@@ -120,18 +104,20 @@ class ImagecsvDataset(Dataset):
 #建立模型框架
 def model_create(model_algo,data_name,class_number):
     model = getattr(models,model_algo)(weights=True)
-    
-    if(model_algo=='googlenet' or model_algo=='resnet18' ):
-        num_ftrs = model.fc.in_features
-        model.fc = nn.Linear(num_ftrs, class_number)
 
-    else :
-        num_ftrs = model.classifier[6].in_features
-        model.classifier[6] = nn.Linear(num_ftrs,class_number)
+    if(model_algo=='googlenet' or model_algo=='resnet18' or model_algo=='inception_v3' ):
+        num_ftrs=model.fc.in_features
+        model.fc= nn.Linear(num_ftrs, class_number)
+
+    # elif(model_algo=='efficientnet_b7' or model_algo=='mobilenet_v2'):
+    #     num_ftrs = model.classifier[1].in_features
+    #     model.classifier[1]= nn.Linear(num_ftrs, class_number)
+
+    else:
+        num_ftrs=model.classifier[6].in_features
+        model.classifier[6]= nn.Linear(num_ftrs, class_number)
 
     return model
-
-
 
 
 #模型表現
@@ -179,10 +165,8 @@ def evaluate_model(model,data_dl,size,data_name,mode=None):
 
 
 
-
-
 #訓練模型
-def trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo,wmse=True):
+def trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo):
     train_accus=[]
     val_accus=[]
     best_val_accu = 0.0
@@ -248,40 +232,38 @@ def trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo,
 
              
 #將模型建立框架後並訓練
-def model_train(model_algo,train_dl,valid_dl,data_name,epochs,class_weight=None,trainclassnum=None):
+def model_train(model_algo,train_dl,valid_dl,data_name,epochs,model_0=None):
 
     if(data_name=="decision"):
-        model=model_create(model_algo,data_name,2)
-    # elif(data_name=='T'or data_name=='F'):
-    #     model=model_create(model_algo,data_name,len(train_dl.dataset.classes))
+        # model=model_create(model_algo,data_name,2)
+        model=copy.deepcopy(model_0)
+        model.classifier[6]=nn.Linear(model.classifier[6].in_features,2)
+    elif(data_name=='T'or data_name=='F'):
+        model=copy.deepcopy(model_0)
+        model.classifier[6]=nn.Linear(model.classifier[6].in_features,len(train_dl.dataset.dataset.classes))
+
     else:
         model=model_create(model_algo,data_name,len(train_dl.dataset.dataset.classes))
 
     if(model_algo=='googlenet' or model_algo=='resnet18' or model_algo=='inception_v3' ):
         model_fc_layer=model.fc
+    # elif(model_algo=='efficientnet_b7' or model_algo=='mobilenet_v2'):
+    #     model_fc_layer=model.classifier[1]
     else:
         model_fc_layer=model.classifier[6]
-        
-    # for param in model.parameters():
-    #     param.requires_grad = False
 
-    # for param in model_fc_layer.parameters():
-    #     param.requires_grad = True
 
     if(data_name=="decision"):
-        optim = torch.optim.Adam(model_fc_layer.parameters(), lr=1e-5)
-        criterion = nn.CrossEntropyLoss()
-        # dense1 = nn.Linear(trainclassnum, 224 * 224 * 3)
-        # reshape = nn.Unflatten(-1,(3,224, 224))
-        # model=nn.Sequential(dense1,reshape,model)
+        optim = torch.optim.Adam(model.classifier.parameters(), lr=1e-4)
+        criterion = nn.CrossEntropyLoss() 
         model=trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo)
     else:   
-        optim = torch.optim.Adam(model_fc_layer.parameters(), lr=1e-4)
+        optim = torch.optim.Adam(model.classifier.parameters(), lr=1e-4)
         criterion = nn.CrossEntropyLoss()
         model=trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo)
-    # torch.save(model, f"model_{model_algo}_{data_name}.pth")
     torch.cuda.empty_cache() 
     return model
+
 
 
 
@@ -296,7 +278,8 @@ def calculate_wmse(epoch,epochs,out,target):
     loss=criterion(out,target)
     return epoch/((epochs*(epochs+1))/2)*loss
 
- #將資料切分成true and false
+
+#將資料切分成true and false
 def split_data(model_0,data_dl,split_mode):
     model_0.eval()
     indexF=[]
@@ -309,15 +292,12 @@ def split_data(model_0,data_dl,split_mode):
             criterion = nn.CrossEntropyLoss(reduction='none')
             loss = criterion(out, target)
             softmax = torch.softmax(out, dim=1)
-            # print(loss)
+
             for idx,loss,t,pred ,softmax in zip(idx,loss,target,y_pred_tag,softmax):
                 if(split_mode[0]=='loss'):    
                     if(loss>split_mode[1]):
                         indexF.append(idx.cpu().numpy().item())  
                         data_dl.dataset.dataset.update_flag(idx)
-                    # elif(loss>split_mode[1] and loss<split_mode[0]):
-                    #    indexF.append(idx.cpu().numpy().item())  
-                    #    indexT.append(idx.cpu().numpy().item())
                     else:
                         indexT.append(idx.cpu().numpy().item())  
                 elif(split_mode=='TandF'):
@@ -327,6 +307,7 @@ def split_data(model_0,data_dl,split_mode):
                         data_dl.dataset.dataset.update_flag(idx)
                     else:
                         indexT.append(idx.cpu().numpy().item())
+                     
                    
                 elif(split_mode[0]=='softmax'):
                  
@@ -334,26 +315,34 @@ def split_data(model_0,data_dl,split_mode):
                         indexF.append(idx.cpu().numpy().item())  
                         data_dl.dataset.dataset.update_flag(idx)
                     else:
-                        indexT.append(idx.cpu().numpy().item())  
+                        indexT.append(idx.cpu().numpy().item())
+                        # if(softmax.max()<split_mode[2]):
+                        #     indexF.append(idx.cpu().numpy().item())
 
                 elif(split_mode[0]=='classaccu'):
                     if(t in split_mode[1]):
                         indexF.append(idx.cpu().numpy().item())  
                         data_dl.dataset.dataset.update_flag(idx)
+                        # if(t in [6,4,7,2]):
+                        #     indexT.append(idx.cpu().numpy().item()) 
+                            
                     else:
                         indexT.append(idx.cpu().numpy().item()) 
-                
-                elif(split_mode[0]=='wmse'):
-                    if(data_dl.dataset.dataset.loss[idx]>split_mode[1]):
-                        indexF.append(idx.cpu().numpy().item())  
-                        data_dl.dataset.dataset.update_flag(idx)
-                    else:
-                        indexT.append(idx.cpu().numpy().item())  
+                        # if(t in [6,4,7,2]):
+                        #     indexF.append(idx.cpu().numpy().item()) 
+                    
+                     # elif(split_mode[0]=='wmse'):
+                #     if(data_dl.dataset.dataset.loss[idx]>split_mode[1]):
+                #         indexF.append(idx.cpu().numpy().item())  
+                #         data_dl.dataset.dataset.update_flag(idx)
+                #     else:
+                #         indexT.append(idx.cpu().numpy().item())  
                
-
-            torch.cuda.empty_cache() 
-        return indexF,indexT
-    
+                            
+        torch.cuda.empty_cache() 
+    return indexF,indexT
+                
+               
 #decision set
 def decision_split(data_dl,model_0):
     flat_data=[]
@@ -369,11 +358,10 @@ def decision_split(data_dl,model_0):
             softmax = torch.softmax(out, dim=1)
             _, y_pred_tag = torch.max(out, dim = 1) 
 
-            for i in idx:
+            for i,d,t in zip(idx,data,target):
                 flat_true.append(int(data_dl.dataset.dataset.flag[i]))
-        
-            flat_data.extend(data.cpu().numpy()) 
-                
+                flat_data.append(d.cpu().numpy()) 
+            
     return flat_data,flat_true
 
 #建立dataset class
@@ -512,3 +500,26 @@ def total_model_evaluate_notdecision(data_dl,size,model_0,model_T,model_F):
     idx2class = {v: k for k, v in data_dl.dataset.dataset.classes}
     confusion_matrix_total = pd.DataFrame(confusion_matrix(flat_true, flat_pred)).rename(columns=idx2class, index=idx2class)
     return total_loss,accu,confusion_matrix_total,sum_F
+
+
+
+# def calculate_lcb(data_dl,model):
+
+#     softmax_max_list = []
+
+#     # 计算每张图片的 softmax 最大值并添加到列表中
+#     with torch.no_grad():
+#         for images, labels in data_dl:
+#             images = images.to(device)
+#             outputs = model(images)
+#             softmax_outputs = nn.softmax(outputs, dim=1)
+#             max_values, _ = torch.max(softmax_outputs, dim=1)
+#             softmax_max_list.extend(max_values.cpu().numpy())
+
+#     # 计算平均值
+#     avg = sum(softmax_max_list) / len(softmax_max_list)
+#     std = torch.tensor(softmax_max_list).std().item()
+
+#     lcb=avg-std
+
+#     return lcb
