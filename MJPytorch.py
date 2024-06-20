@@ -89,7 +89,7 @@ class ImagecsvDataset(Dataset):
    
     def __getitem__(self,idx):
         
-        img_path = os.path.join(self.root_dir, self.path[idx]+'.jpeg')
+        img_path = os.path.join(self.root_dir, self.path[idx])
         img = Image.open(img_path)
         
         img=self.transform(img)
@@ -108,11 +108,6 @@ def model_create(model_algo,data_name,class_number):
     if(model_algo=='googlenet' or model_algo=='resnet18' or model_algo=='inception_v3' ):
         num_ftrs=model.fc.in_features
         model.fc= nn.Linear(num_ftrs, class_number)
-
-    # elif(model_algo=='efficientnet_b7' or model_algo=='mobilenet_v2'):
-    #     num_ftrs = model.classifier[1].in_features
-    #     model.classifier[1]= nn.Linear(num_ftrs, class_number)
-
     else:
         num_ftrs=model.classifier[6].in_features
         model.classifier[6]= nn.Linear(num_ftrs, class_number)
@@ -149,8 +144,8 @@ def evaluate_model(model,data_dl,size,data_name,mode=None):
                     correct=torch.sum(y_pred_tag == target).item()
                     accu += correct      
 
-            total_loss=total_loss/size
-            accu=accu/size
+            total_loss/=size
+            accu/=size
 
         a=sorted(set(flat_true))
         if(mode=='eval'):
@@ -173,6 +168,8 @@ def trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo)
     epochs_without_improvement = 0
     patience=4
     best_model = None
+
+    cnt_for_lr_reduce = 0
     
     for epoch in range(epochs):
         
@@ -208,17 +205,27 @@ def trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo)
         if val_accu > best_val_accu:
             best_val_accu = val_accu
             epochs_without_improvement = 0
+            
+            cnt_for_lr_reduce=0
+
             best_model=copy.deepcopy(model)
             print(f"{epochs_without_improvement}")
-
+            torch.save(best_model, f"model_{model_algo}_{data_name}_{epoch}.pth")
         else:
             epochs_without_improvement += 1
+            cnt_for_lr_reduce += 1
+
+        # if cnt_for_lr_reduce >=2:
+        #     for p in optim.param_groups:
+        #         p['lr'] *= 0.9
+        #     cnt_for_lr_reduce = 0
+        #     print(f"Learning rate reduced by 10%{p['lr']}")
 
         if epochs_without_improvement >= patience:
             print(f"{epochs_without_improvement} Early stopping!")
             break
         
-        torch.save(best_model, f"model_{model_algo}_{data_name}_{epoch}.pth") 
+         
         torch.cuda.empty_cache()               
     plt.plot(train_accus,'-o')
     plt.plot(val_accus,'-o')
@@ -247,14 +254,16 @@ def model_train(model_algo,train_dl,valid_dl,data_name,epochs,model_0=None):
 
     if(model_algo=='googlenet' or model_algo=='resnet18' or model_algo=='inception_v3' ):
         model_fc_layer=model.fc
-    # elif(model_algo=='efficientnet_b7' or model_algo=='mobilenet_v2'):
-    #     model_fc_layer=model.classifier[1]
     else:
         model_fc_layer=model.classifier[6]
 
 
     if(data_name=="decision"):
         optim = torch.optim.Adam(model.classifier.parameters(), lr=1e-4)
+        criterion = nn.CrossEntropyLoss() 
+        model=trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo)
+    elif(data_name=='0'):
+        optim = torch.optim.Adam(model.parameters(), lr=1e-4)
         criterion = nn.CrossEntropyLoss() 
         model=trainer(epochs,model,criterion,optim,train_dl,valid_dl,data_name,model_algo)
     else:   
@@ -418,19 +427,20 @@ def total_model_evaluate(data_dl,size,model_0,model_T,model_F,model_decision):
     flat_pred=[]
     sum_F=0
     sum_T=0
+    model_0.eval()
+    model_T.eval()
+    model_F.eval()
+    model_decision.eval()
+    torch.manual_seed(0)
     with torch.no_grad():
         for data,target,idx in data_dl:
             outputs=[]
             data,target=data.to(device),target.to(device)
-            out_growth = model_0(data)
-
-            softmax=torch.softmax(out_growth, dim=1)
-
             out=model_decision(data)
-            _, y_pred_tag = torch.max(out, dim = 1)
+            _, y_pred_d = torch.max(out, dim = 1)
 
 
-            for pred,d,t in zip(y_pred_tag,data,target):
+            for pred,d,t in zip(y_pred_d,data,target):
 
                 if(pred==0):
                     outputs.append(model_F(d.unsqueeze(0)))
@@ -470,11 +480,10 @@ def total_model_evaluate_notdecision(data_dl,size,model_0,model_T,model_F):
         for data,target,idx in data_dl:
             outputs=[]
             data,target=data.to(device),target.to(device)
-            out_growth = model_0(data)
             criterion = nn.CrossEntropyLoss(reduction='none')
-            loss_0 = criterion(out_growth , target)
+            
      
-            for l,d,t,idx in zip(loss_0,data,target,idx):
+            for d,t,idx in zip(data,target,idx):
                 
                 if(data_dl.dataset.dataset.flag[idx]==False):
                     outputs.append(model_F(d.unsqueeze(0)))
@@ -503,23 +512,3 @@ def total_model_evaluate_notdecision(data_dl,size,model_0,model_T,model_F):
 
 
 
-# def calculate_lcb(data_dl,model):
-
-#     softmax_max_list = []
-
-#     # 计算每张图片的 softmax 最大值并添加到列表中
-#     with torch.no_grad():
-#         for images, labels in data_dl:
-#             images = images.to(device)
-#             outputs = model(images)
-#             softmax_outputs = nn.softmax(outputs, dim=1)
-#             max_values, _ = torch.max(softmax_outputs, dim=1)
-#             softmax_max_list.extend(max_values.cpu().numpy())
-
-#     # 计算平均值
-#     avg = sum(softmax_max_list) / len(softmax_max_list)
-#     std = torch.tensor(softmax_max_list).std().item()
-
-#     lcb=avg-std
-
-#     return lcb
